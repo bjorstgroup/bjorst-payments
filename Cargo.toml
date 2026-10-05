@@ -1,0 +1,33 @@
+[package]
+name = "bjorst-payments"
+version = "0.1.0"
+edition = "2021"
+authors = ["Bjorst Engineering <engineering@bjorst.com>"]
+license = "MIT"
+description = "Provider-neutral payment checkout for Bjorst services: Paystack, Flutterwave and Remita"
+
+[dependencies]
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+
+# Remita's request hashes, and the webhook checks.
+sha2 = { version = "0.10", optional = true }
+hex = { version = "0.4", optional = true }
+# Only with the `webhook` feature.
+hmac = { version = "0.12", optional = true }
+subtle = { version = "2", optional = true }
+
+[features]
+default = []
+paystack = []
+flutterwave = []
+remita = ["dep:sha2", "dep:hex"]
+# `Provider::verify_webhook`: Paystack's HMAC-SHA512, Flutterwave's
+# `verif-hash`, Remita's (unsigned) notification parsing.
+webhook = ["dep:hmac", "dep:sha2", "dep:hex", "dep:subtle"]
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt"] }
+wiremock = "0.6"
