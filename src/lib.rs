@@ -529,7 +529,10 @@ pub(crate) fn urlencode(segment: &str) -> String {
 }
 
 /// Constant-time equality of two byte strings.
-#[cfg(all(feature = "webhook", any(feature = "paystack", feature = "flutterwave")))]
+#[cfg(all(
+    feature = "webhook",
+    any(feature = "paystack", feature = "flutterwave")
+))]
 pub(crate) fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     use subtle::ConstantTimeEq;
     a.ct_eq(b).into()
