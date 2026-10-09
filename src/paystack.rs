@@ -505,7 +505,10 @@ mod tests {
             .mount(&server)
             .await;
         let paystack = Paystack::new(KEY).with_base_url(server.uri());
-        let intent = PaymentIntent { plan: Some("PLN_abc".into()), ..intent() };
+        let intent = PaymentIntent {
+            plan: Some("PLN_abc".into()),
+            ..intent()
+        };
         paystack.initialize(&intent).await.unwrap();
     }
 
@@ -523,7 +526,9 @@ mod tests {
             .await;
         Mock::given(method("POST"))
             .and(path("/subscription/disable"))
-            .and(body_partial_json(json!({ "code": "SUB_1", "token": "tok" })))
+            .and(body_partial_json(
+                json!({ "code": "SUB_1", "token": "tok" }),
+            ))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "status": true })))
             .expect(1)
             .mount(&server)
@@ -537,9 +542,23 @@ mod tests {
             .await;
         let paystack = Paystack::new(KEY).with_base_url(server.uri());
         let sub = paystack.subscription("SUB_1").await.unwrap();
-        assert_eq!((sub.status.as_str(), sub.email_token.as_str(), sub.plan_code.as_deref()), ("active", "tok", Some("PLN_abc")));
-        paystack.disable_subscription(&sub.code, &sub.email_token).await.unwrap();
-        assert!(paystack.manage_link("SUB_1").await.unwrap().contains("manage"));
+        assert_eq!(
+            (
+                sub.status.as_str(),
+                sub.email_token.as_str(),
+                sub.plan_code.as_deref()
+            ),
+            ("active", "tok", Some("PLN_abc"))
+        );
+        paystack
+            .disable_subscription(&sub.code, &sub.email_token)
+            .await
+            .unwrap();
+        assert!(paystack
+            .manage_link("SUB_1")
+            .await
+            .unwrap()
+            .contains("manage"));
     }
 
     #[cfg(feature = "webhook")]
@@ -550,6 +569,9 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert(SIGNATURE_HEADER, paystack.sign(body).parse().unwrap());
         let event = paystack.verify_webhook(&headers, body).unwrap();
-        assert_eq!((event.event.as_str(), event.reference.as_str()), ("subscription.create", ""));
+        assert_eq!(
+            (event.event.as_str(), event.reference.as_str()),
+            ("subscription.create", "")
+        );
     }
 }
