@@ -196,6 +196,10 @@ pub struct PaymentIntent {
     pub metadata: serde_json::Value,
     /// Where the provider returns the payer after the attempt.
     pub callback_url: String,
+    /// A recurring plan to start on this payment (Paystack's `PLN_…` code).
+    /// Paystack charges the plan's own amount and currency; `amount` is still
+    /// what `verify` holds the first charge against. Other providers ignore it.
+    pub plan: Option<String>,
 }
 
 /// Where to send the payer.
@@ -279,7 +283,8 @@ impl Verification {
 pub struct WebhookEvent {
     /// The provider's event name (`charge.success`, `charge.completed`, …).
     pub event: String,
-    /// The caller's reference the event is about.
+    /// The caller's reference the event is about. Empty for an event that is
+    /// not about a transaction (Paystack's `subscription.*`); read `raw`.
     pub reference: String,
     /// The provider's id for the transaction, when the event carries one.
     pub provider_reference: Option<String>,

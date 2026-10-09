@@ -177,3 +177,11 @@ currency mismatches refused.
 ## License
 
 MIT
+
+## Paystack subscriptions
+
+Create the plan once in the dashboard (Products → Plans; one per currency). Then:
+
+- `PaymentIntent { plan: Some("PLN_…".into()), .. }` starts the plan on the first payment. Paystack charges the plan's own amount; `amount` is still what `verify` holds that first charge against. Later charges arrive as `charge.success` webhooks.
+- Subscription webhooks (`subscription.create`, `subscription.disable`, `subscription.not_renew`, `invoice.payment_failed`) carry no transaction reference: `WebhookEvent::reference` is empty and the details are in `raw`.
+- `Paystack::subscription(code)`, `disable_subscription(code, email_token)` and `manage_link(code)` read, stop and hand the payer a page to update their card.
