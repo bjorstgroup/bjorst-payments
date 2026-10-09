@@ -30,6 +30,23 @@ pub const BASE_URL: &str = "https://api.paystack.co";
 /// The header Paystack signs webhook deliveries in.
 pub const SIGNATURE_HEADER: &str = "x-paystack-signature";
 
+/// A Paystack subscription as `GET /subscription/:code` describes it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Subscription {
+    /// `SUB_…`.
+    pub code: String,
+    /// `active`, `non-renewing`, `attention`, `completed` or `cancelled`.
+    pub status: String,
+    /// The token `disable_subscription` needs alongside the code.
+    pub email_token: String,
+    /// `PLN_…`.
+    pub plan_code: Option<String>,
+    /// When the next charge is due, as Paystack wrote it.
+    pub next_payment_date: Option<String>,
+    /// The response body.
+    pub raw: serde_json::Value,
+}
+
 /// A Paystack account.
 #[derive(Debug, Clone)]
 pub struct Paystack {
@@ -60,6 +77,50 @@ impl Paystack {
         self.client
             .post(format!("{}{path}", self.base_url))
             .bearer_auth(self.secret_key.expose())
+    }
+
+    /// A subscription, by its `SUB_…` code.
+    pub async fn subscription(&self, code: &str) -> Result<Subscription> {
+        let url = format!("{}/subscription/{}", self.base_url, crate::urlencode(code));
+        let request = self.client.get(url).bearer_auth(self.secret_key.expose());
+        let (status, res) = send_json(NAME, request).await?;
+        if !(200..300).contains(&status) || res.get("status") != Some(&json!(true)) {
+            return Err(api_error(NAME, status, &res));
+        }
+        Ok(Subscription {
+            code: str_field(NAME, &res, "/data/subscription_code")?.to_owned(),
+            status: str_field(NAME, &res, "/data/status")?.to_owned(),
+            email_token: str_field(NAME, &res, "/data/email_token")?.to_owned(),
+            plan_code: loose_string(&res, "/data/plan/plan_code"),
+            next_payment_date: res["data"]["next_payment_date"].as_str().map(str::to_owned),
+            raw: res,
+        })
+    }
+
+    /// Stop a subscription. `email_token` is [`Subscription::email_token`].
+    pub async fn disable_subscription(&self, code: &str, email_token: &str) -> Result<()> {
+        let body = json!({ "code": code, "token": email_token });
+        let (status, res) = send_json(NAME, self.post("/subscription/disable").json(&body)).await?;
+        if !(200..300).contains(&status) || res.get("status") != Some(&json!(true)) {
+            return Err(api_error(NAME, status, &res));
+        }
+        Ok(())
+    }
+
+    /// A one-time link to Paystack's page where the payer updates their card
+    /// or cancels.
+    pub async fn manage_link(&self, code: &str) -> Result<String> {
+        let url = format!(
+            "{}/subscription/{}/manage/link",
+            self.base_url,
+            crate::urlencode(code)
+        );
+        let request = self.client.get(url).bearer_auth(self.secret_key.expose());
+        let (status, res) = send_json(NAME, request).await?;
+        if !(200..300).contains(&status) || res.get("status") != Some(&json!(true)) {
+            return Err(api_error(NAME, status, &res));
+        }
+        Ok(str_field(NAME, &res, "/data/link")?.to_owned())
     }
 
     /// The signature Paystack would put on `body`: hex HMAC-SHA512 under the
@@ -104,6 +165,9 @@ impl Provider for Paystack {
             "reference": intent.reference,
             "callback_url": intent.callback_url,
         });
+        if let Some(plan) = &intent.plan {
+            body["plan"] = json!(plan);
+        }
         if !intent.metadata.is_null() {
             // Paystack stores `metadata` as given; a string is the documented
             // form, an object is accepted and returned as an object.
@@ -190,7 +254,12 @@ impl Provider for Paystack {
         })?;
         Ok(WebhookEvent {
             event: raw["event"].as_str().unwrap_or_default().to_owned(),
-            reference: str_field(NAME, &raw, "/data/reference")?.to_owned(),
+            // `subscription.*` events carry no transaction reference.
+            reference: raw
+                .pointer("/data/reference")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+                .to_owned(),
             provider_reference: loose_string(&raw, "/data/id"),
             raw,
         })
@@ -420,5 +489,89 @@ mod tests {
                 .verify_webhook(&HeaderMap::new(), BODY)
                 .is_err());
         }
+    }
+
+    #[tokio::test]
+    async fn a_plan_rides_along_on_initialize() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/transaction/initialize"))
+            .and(body_partial_json(json!({ "plan": "PLN_abc" })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "status": true,
+                "data": { "authorization_url": "https://checkout.paystack.com/x", "access_code": "x", "reference": "gk-ref-1" }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let paystack = Paystack::new(KEY).with_base_url(server.uri());
+        let intent = PaymentIntent {
+            plan: Some("PLN_abc".into()),
+            ..intent()
+        };
+        paystack.initialize(&intent).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn fetch_disable_and_manage_a_subscription() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/subscription/SUB_1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "status": true,
+                "data": { "subscription_code": "SUB_1", "status": "active", "email_token": "tok",
+                          "next_payment_date": "2026-11-09T00:00:00.000Z", "plan": { "plan_code": "PLN_abc" } }
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/subscription/disable"))
+            .and(body_partial_json(
+                json!({ "code": "SUB_1", "token": "tok" }),
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "status": true })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/subscription/SUB_1/manage/link"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "status": true, "data": { "link": "https://paystack.com/manage/subscriptions/abc" }
+            })))
+            .mount(&server)
+            .await;
+        let paystack = Paystack::new(KEY).with_base_url(server.uri());
+        let sub = paystack.subscription("SUB_1").await.unwrap();
+        assert_eq!(
+            (
+                sub.status.as_str(),
+                sub.email_token.as_str(),
+                sub.plan_code.as_deref()
+            ),
+            ("active", "tok", Some("PLN_abc"))
+        );
+        paystack
+            .disable_subscription(&sub.code, &sub.email_token)
+            .await
+            .unwrap();
+        assert!(paystack
+            .manage_link("SUB_1")
+            .await
+            .unwrap()
+            .contains("manage"));
+    }
+
+    #[cfg(feature = "webhook")]
+    #[test]
+    fn a_subscription_event_without_a_reference_still_verifies() {
+        let paystack = Paystack::new(KEY);
+        let body = br#"{"event":"subscription.create","data":{"subscription_code":"SUB_1"}}"#;
+        let mut headers = HeaderMap::new();
+        headers.insert(SIGNATURE_HEADER, paystack.sign(body).parse().unwrap());
+        let event = paystack.verify_webhook(&headers, body).unwrap();
+        assert_eq!(
+            (event.event.as_str(), event.reference.as_str()),
+            ("subscription.create", "")
+        );
     }
 }
