@@ -1,6 +1,6 @@
 [package]
 name = "bjorst-payments"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 authors = ["Bjorst Engineering <engineering@bjorst.com>"]
 license = "MIT"
